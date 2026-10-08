@@ -2744,11 +2744,19 @@ class DefaultActionWatchdog(BaseWatchdog):
 		doc = await cdp_client.send.DOM.getDocument(params={'depth': -1}, session_id=session_id)
 		root_node_id = doc['root']['nodeId']
 
-		# Search for text using XPath
+		# Search for text using XPath (escape quotes via XPath 1.0 concat() when needed)
+		if '"' not in event.text:
+			xpath_literal = f'"{event.text}"'
+		elif "'" not in event.text:
+			xpath_literal = f"'{event.text}'"
+		else:
+			parts = event.text.split('"')
+			xpath_literal = 'concat(' + ', \'"\', '.join(f'"{part}"' for part in parts) + ')'
+
 		search_queries = [
-			f'//*[contains(text(), "{event.text}")]',
-			f'//*[contains(., "{event.text}")]',
-			f'//*[@*[contains(., "{event.text}")]]',
+			f'//*[contains(text(), {xpath_literal})]',
+			f'//*[contains(., {xpath_literal})]',
+			f'//*[@*[contains(., {xpath_literal})]]',
 		]
 
 		found = False
@@ -2783,11 +2791,13 @@ class DefaultActionWatchdog(BaseWatchdog):
 				continue
 
 		if not found:
-			# Fallback: Try JavaScript search
+			# Fallback: Try JavaScript search with JSON-serialized search text
+			escaped_text = json.dumps(event.text)
 			js_result = await cdp_client.send.Runtime.evaluate(
 				params={
 					'expression': f'''
 							(() => {{
+								const searchText = {escaped_text};
 								const walker = document.createTreeWalker(
 									document.body,
 									NodeFilter.SHOW_TEXT,
@@ -2796,7 +2806,7 @@ class DefaultActionWatchdog(BaseWatchdog):
 								);
 								let node;
 								while (node = walker.nextNode()) {{
-									if (node.textContent.includes("{event.text}")) {{
+									if (node.textContent && node.textContent.includes(searchText)) {{
 										node.parentElement.scrollIntoView({{behavior: 'smooth', block: 'center'}});
 										return true;
 									}}
